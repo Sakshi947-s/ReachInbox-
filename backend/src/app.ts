@@ -73,6 +73,21 @@ export function createApp(): Express {
   app.use('/admin/queues', bullBoardAuth, bullBoardRouter);
 
   // 7. REST API Routes
+  app.get('/', (req, res) => {
+    // If opened in a web browser, redirect to frontend dashboard
+    if (req.accepts('html')) {
+      res.redirect(env.FRONTEND_URL);
+      return;
+    }
+    res.json({
+      name: 'ReachInbox Email Job Scheduler API',
+      status: 'online',
+      frontendUrl: env.FRONTEND_URL,
+      bullBoardUrl: `${env.BACKEND_URL}/admin/queues`,
+      healthCheck: `${env.BACKEND_URL}/api/health`,
+    });
+  });
+
   app.use('/api', healthRoutes);
   app.use('/api/auth', authRoutes);
   app.use('/api/campaigns', campaignRoutes);
