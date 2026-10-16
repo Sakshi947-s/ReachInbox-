@@ -1,0 +1,177 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  PAUSED
+  CANCELLED
+}
+
+enum EmailJobStatus {
+  SCHEDULED
+  QUEUED
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum SlackConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+model User {
+  id              String            @id @default(uuid())
+  googleId        String            @unique
+  name            String
+  email           String            @unique
+  avatarUrl       String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  campaigns       Campaign[]
+  senders         Sender[]
+  emailJobs       EmailJob[]
+  slackConnection SlackConnection?
+
+  @@index([email])
+}
+
+model Sender {
+  id                 String     @id @default(uuid())
+  ownerId            String
+  displayName        String
+  email              String
+  smtpHost           String?
+  smtpPort           Int?
+  smtpUser           String?
+  smtpPassEncrypted  String?
+  isDefault          Boolean    @default(false)
+  isActive           Boolean    @default(true)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  owner              User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  emailJobs          EmailJob[]
+
+  @@index([ownerId])
+  @@index([email])
+}
+
+model Campaign {
+  id                   String         @id @default(uuid())
+  ownerId              String
+  name                 String?
+  subject              String
+  body                 String         @db.Text
+  startTime            DateTime
+  delayBetweenEmailsMs Int            @default(2000)
+  hourlyLimit          Int            @default(100)
+  status               CampaignStatus @default(SCHEDULED)
+  totalRecipients      Int            @default(0)
+  sentCount            Int            @default(0)
+  failedCount          Int            @default(0)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  owner                User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  emailJobs            EmailJob[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([startTime])
+}
+
+model EmailJob {
+  id                 String         @id @default(uuid())
+  campaignId         String
+  ownerId            String
+  senderId           String
+  recipientEmail     String
+  subjectSnapshot    String
+  bodySnapshot       String         @db.Text
+  scheduledAt        DateTime
+  sentAt             DateTime?
+  status             EmailJobStatus @default(SCHEDULED)
+  attemptCount       Int            @default(0)
+  maxAttempts        Int            @default(3)
+  bullJobId          String?
+  idempotencyKey     String         @unique
+  errorMessage       String?        @db.Text
+  etherealPreviewUrl String?
+  esIndexed          Boolean        @default(false)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  campaign           Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  owner              User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  sender             Sender         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, recipientEmail])
+  @@index([ownerId, status])
+  @@index([scheduledAt])
+  @@index([campaignId])
+  @@index([status])
+}
+
+model SlackConnection {
+  id                   String                @id @default(uuid())
+  ownerId              String                @unique
+  teamId               String
+  teamName             String?
+  slackUserId          String?
+  channelId            String?
+  channelName          String?
+  accessTokenEncrypted String
+  grantedScopes        String
+  status               SlackConnectionStatus @default(CONNECTED)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  owner                User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid())
+  aggregateType String
+  aggregateId   String
+  eventType     String
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  retryCount    Int          @default(0)
+  scheduledFor  DateTime     @default(now())
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([status, scheduledFor])
+  @@index([aggregateId])
+}
+
+model QuotaNotificationState {
+  id             String   @id @default(uuid())
+  senderId       String
+  quotaWindowKey String
+  lastNotifiedAt DateTime @default(now())
+
+  @@unique([senderId, quotaWindowKey])
+  @@index([senderId])
+}
