@@ -9,6 +9,7 @@ describe('Restart Recovery & Idempotency Verification', () => {
   let testUserId: string;
   let testSenderId: string;
   let testSenderEmail: string;
+  let testEmailJobId: string;
 
   beforeAll(async () => {
     const user = await prisma.user.create({
@@ -34,6 +35,9 @@ describe('Restart Recovery & Idempotency Verification', () => {
 
   afterAll(async () => {
     if (testUserId) {
+      if (testEmailJobId) {
+        await prisma.outboxEvent.deleteMany({ where: { aggregateId: testEmailJobId } });
+      }
       await prisma.campaign.deleteMany({ where: { ownerId: testUserId } });
       await prisma.user.deleteMany({ where: { id: testUserId } });
     }
@@ -42,6 +46,7 @@ describe('Restart Recovery & Idempotency Verification', () => {
   it('preserves scheduled jobs across worker restarts and guarantees idempotency', async () => {
     const campaignId = uuidv4();
     const emailJobId = uuidv4();
+    testEmailJobId = emailJobId;
     const recipient = `recipient.restart.${Date.now()}@example.com`;
     const targetScheduledTime = new Date(Date.now() + 4000); // 4 seconds in future
 

@@ -14,7 +14,8 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "outbox:remediate": "tsx scripts/remediate-orphans.ts"
   },
   "dependencies": {
     "@bull-board/api": "^6.8.0",
