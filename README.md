@@ -81,7 +81,9 @@ The **ReachInbox Email Job Scheduler** enables users to compose email campaigns,
 * **Containerization**: Docker Compose (PostgreSQL, Redis, Elasticsearch)
 
 ---
+## 4. Architecture Diagram
 
+[File display](https://viewscreen.githubusercontent.com/markdown/mermaid?...)
 ## 4. Architecture Diagram
 
 ```mermaid
