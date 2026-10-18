@@ -329,20 +329,28 @@ npm run dev
 
 ---
 
-## 12. Ethereal Email SMTP Setup
+## 12. Email SMTP Setup (Real SMTP & Ethereal Fallback)
 
-The application features **zero-setup automatic Ethereal provisioning**:
+The application supports both **real production SMTP delivery** (e.g., Gmail App Passwords, SendGrid, Amazon SES) and **automatic Ethereal test inbox provisioning**.
+
+### Option A: Real SMTP (e.g. Gmail)
+1. Enable 2-Step Verification on your Google Account.
+2. Go to [Google App Passwords](https://myaccount.google.com/apppasswords) and generate a 16-character App Password (select app name "ReachInbox Scheduler").
+3. In `backend/.env`, configure:
+   ```env
+   SMTP_HOST="smtp.gmail.com"
+   SMTP_PORT=587
+   SMTP_USER="your-email@gmail.com"
+   SMTP_PASS="xxxx-xxxx-xxxx-xxxx"   # 16-character Google App Password
+   SMTP_FROM="ReachInbox Scheduler <your-email@gmail.com>"
+   ```
+4. Verify your configuration with the built-in test-send API or in the dashboard:
+   - Authenticated endpoint: `POST /api/emails/test-send`
+   - Returns `{ success: true, provider: 'real', messageId: '...', smtpVerified: true }`
+
+### Option B: Automatic Ethereal Fallback (Zero Setup)
 - If `SMTP_USER` and `SMTP_PASS` are left empty, the server automatically generates a fresh Ethereal test account on startup via `nodemailer.createTestAccount()`.
-- Delivered messages generate an **Ethereal Preview URL** (e.g. `https://ethereal.email/message/...`), which is stored in PostgreSQL and rendered as a one-click button in the Sent Emails dashboard.
-
-To provide specific Ethereal credentials in `backend/.env`:
-```env
-SMTP_HOST="smtp.ethereal.email"
-SMTP_PORT=587
-SMTP_USER="your-ethereal-user@ethereal.email"
-SMTP_PASS="your-ethereal-password"
-SMTP_FROM="ReachInbox Scheduler <scheduler@reachinbox.ai>"
-```
+- Delivered messages generate an **Ethereal Preview URL** (e.g., `https://ethereal.email/message/...`), stored in PostgreSQL and displayed as clickable preview links in the Sent Emails tab.
 
 ---
 

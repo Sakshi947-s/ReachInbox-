@@ -4,20 +4,29 @@ import React, { useState } from 'react';
 import { SlackStatus } from '@/types';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
-import { Slack, X, CheckCircle2, AlertTriangle, Send, Unlink, ExternalLink, Loader2 } from 'lucide-react';
+import { Slack, X, CheckCircle2, AlertTriangle, Send, Unlink, ExternalLink, Loader2, Settings } from 'lucide-react';
+
+const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL
+  ? process.env.NEXT_PUBLIC_API_URL.replace('/api', '')
+  : 'http://localhost:5000';
+
 
 interface SlackModalProps {
   isOpen: boolean;
   onClose: () => void;
   slackStatus?: SlackStatus;
   onStatusUpdated: () => void;
+  /** Whether SLACK_CLIENT_ID and SLACK_CLIENT_SECRET are configured in the backend .env */
+  slackConfigured?: boolean;
 }
+
 
 export const SlackModal: React.FC<SlackModalProps> = ({
   isOpen,
   onClose,
   slackStatus,
   onStatusUpdated,
+  slackConfigured = true,
 }) => {
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isSendingTest, setIsSendingTest] = useState(false);
@@ -27,7 +36,8 @@ export const SlackModal: React.FC<SlackModalProps> = ({
   const isConnected = slackStatus?.status === 'CONNECTED';
 
   const handleConnect = () => {
-    window.location.href = 'http://localhost:5000/api/auth/slack';
+    if (!slackConfigured) return;
+    window.location.href = `${API_ORIGIN}/api/slack/auth`;
   };
 
   const handleDisconnect = async () => {
@@ -94,6 +104,20 @@ export const SlackModal: React.FC<SlackModalProps> = ({
                 </p>
               </div>
             </div>
+          ) : !slackConfigured ? (
+            /* Slack credentials not configured in backend .env */
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start space-x-3">
+              <Settings className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="text-xs text-red-800">
+                <span className="font-semibold block text-sm">Slack credentials not configured</span>
+                <p className="mt-1">
+                  Add <code className="bg-red-100 px-1 rounded">SLACK_CLIENT_ID</code> and{' '}
+                  <code className="bg-red-100 px-1 rounded">SLACK_CLIENT_SECRET</code> to your{' '}
+                  <code className="bg-red-100 px-1 rounded">.env</code> file, then restart the backend.
+                </p>
+                <p className="mt-1 text-red-600">See README for Slack App setup instructions.</p>
+              </div>
+            </div>
           ) : (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start space-x-3">
               <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
@@ -105,6 +129,7 @@ export const SlackModal: React.FC<SlackModalProps> = ({
               </div>
             </div>
           )}
+
 
           {/* Configuration Note */}
           <div className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1">
@@ -155,7 +180,9 @@ export const SlackModal: React.FC<SlackModalProps> = ({
               </button>
               <button
                 onClick={handleConnect}
-                className="flex items-center space-x-2 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 rounded-lg shadow-sm"
+                disabled={!slackConfigured}
+                title={!slackConfigured ? 'Add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET to .env first' : undefined}
+                className="flex items-center space-x-2 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-sm"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span>Connect Slack Workspace</span>

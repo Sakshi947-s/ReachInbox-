@@ -8,6 +8,7 @@ import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { parseRecipientsFromContent } from '../utils/csv.js';
 import { outboxService } from '../services/outbox.service.js';
 import { emailQueue } from '../queues/email.queue.js';
+import { sendSlackSchedulingNotification } from '../integrations/slack/client.js';
 
 const createCampaignSchema = z.object({
   name: z.string().optional(),
@@ -229,6 +230,20 @@ export async function createCampaign(req: AuthenticatedRequest, res: Response): 
     // 5. Trigger immediate asynchronous Outbox dispatch to BullMQ
     outboxService.reconcileOutbox().catch((err) => {
       logger.error({ err }, 'Error in immediate outbox dispatch');
+    });
+
+    // 6. Asynchronously dispatch Slack scheduling notification (non-blocking)
+    sendSlackSchedulingNotification({
+      campaignId,
+      ownerId,
+      name: name || subject,
+      subject,
+      totalRecipients: recipientList.length,
+      startTime: initialSendTime,
+      delayBetweenEmailsMs,
+      hourlyLimit: effectiveHourlyLimit,
+    }).catch((err) => {
+      logger.error({ err, campaignId }, 'Failed to dispatch Slack scheduling notification (non-blocking)');
     });
 
     res.status(201).json({

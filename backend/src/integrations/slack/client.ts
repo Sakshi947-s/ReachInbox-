@@ -168,3 +168,325 @@ export async function sendSlackRateLimitNotification(params: SendRateLimitAlertP
     return false;
   }
 }
+
+export interface SlackConfigValidation {
+  configured: boolean;
+  mode: 'bot' | 'oauth' | 'none';
+  hasBotToken: boolean;
+  hasChannelId: boolean;
+  channel?: string;
+  error?: string;
+}
+
+/**
+ * Validates Slack configuration from environment variables safely.
+ * Never prints or leaks token secrets.
+ */
+export function validateSlackConfig(): SlackConfigValidation {
+  const hasBotToken = Boolean(env.SLACK_BOT_TOKEN && env.SLACK_BOT_TOKEN.trim().length > 0);
+  const hasChannelId = Boolean(env.SLACK_CHANNEL_ID && env.SLACK_CHANNEL_ID.trim().length > 0);
+
+  if (hasBotToken && hasChannelId) {
+    return {
+      configured: true,
+      mode: 'bot',
+      hasBotToken: true,
+      hasChannelId: true,
+      channel: env.SLACK_CHANNEL_ID,
+    };
+  }
+
+  if (hasBotToken && !hasChannelId) {
+    return {
+      configured: false,
+      mode: 'bot',
+      hasBotToken: true,
+      hasChannelId: false,
+      error: 'SLACK_BOT_TOKEN is configured but SLACK_CHANNEL_ID is missing. Direct bot notifications cannot be delivered.',
+    };
+  }
+
+  if (!hasBotToken && hasChannelId) {
+    return {
+      configured: false,
+      mode: 'none',
+      hasBotToken: false,
+      hasChannelId: true,
+      error: 'SLACK_CHANNEL_ID is configured but SLACK_BOT_TOKEN is missing. Direct bot notifications cannot be delivered.',
+    };
+  }
+
+  return {
+    configured: false,
+    mode: 'none',
+    hasBotToken: false,
+    hasChannelId: false,
+  };
+}
+
+export interface PostSlackMessageParams {
+  channel?: string;
+  text: string;
+  blocks?: any[];
+  ownerId?: string;
+}
+
+export interface SlackNotificationResult {
+  success: boolean;
+  ts?: string;
+  channel?: string;
+  reason?: string;
+}
+
+/**
+ * Sends a message to Slack using WebClient.
+ * Prioritizes direct bot token (SLACK_BOT_TOKEN + SLACK_CHANNEL_ID) and falls back
+ * to user's OAuth connection if ownerId is provided.
+ *
+ * Guarantees non-blocking execution: catches errors safely and never throws.
+ */
+export async function postSlackNotification(params: PostSlackMessageParams): Promise<SlackNotificationResult> {
+  const { channel, text, blocks, ownerId } = params;
+  const config = validateSlackConfig();
+
+  let client: WebClient | null = null;
+  let targetChannel: string | undefined = channel;
+
+  // 1. Prioritize environment-level direct bot token
+  if (config.configured && env.SLACK_BOT_TOKEN) {
+    client = new WebClient(env.SLACK_BOT_TOKEN);
+    targetChannel = channel || env.SLACK_CHANNEL_ID;
+  } else if (ownerId) {
+    // 2. Fall back to user OAuth connection if available
+    try {
+      const connection = await prisma.slackConnection.findUnique({
+        where: { ownerId },
+      });
+      if (
+        connection &&
+        connection.status === 'CONNECTED' &&
+        connection.accessTokenEncrypted &&
+        connection.accessTokenEncrypted !== 'REVOKED'
+      ) {
+        const token = decrypt(connection.accessTokenEncrypted);
+        client = new WebClient(token);
+        targetChannel = channel || connection.channelId || '#general';
+      }
+    } catch (err) {
+      logger.warn({ ownerId, err }, 'Failed to resolve user Slack connection for notification');
+    }
+  }
+
+  if (!client || !targetChannel) {
+    const reason =
+      config.error ||
+      'Slack notifications not configured (neither SLACK_BOT_TOKEN nor connected user Slack account found)';
+    logger.debug({ reason }, 'Skipping Slack notification');
+    return { success: false, reason };
+  }
+
+  try {
+    const response = await client.chat.postMessage({
+      channel: targetChannel,
+      text,
+      blocks,
+    });
+
+    logger.info(
+      { channel: targetChannel, ts: response.ts },
+      'Slack notification posted successfully'
+    );
+
+    return {
+      success: true,
+      ts: response.ts,
+      channel: targetChannel,
+    };
+  } catch (error: any) {
+    const slackError = error?.data?.error || error?.message || 'Unknown Slack API error';
+    logger.error(
+      { channel: targetChannel, slackError },
+      'Slack notification delivery failed (non-blocking)'
+    );
+    return {
+      success: false,
+      reason: slackError,
+    };
+  }
+}
+
+export interface SchedulingNotificationParams {
+  campaignId: string;
+  ownerId?: string;
+  name?: string | null;
+  subject: string;
+  totalRecipients: number;
+  startTime: Date;
+  delayBetweenEmailsMs: number;
+  hourlyLimit: number;
+  channel?: string;
+}
+
+/**
+ * Dispatches a Slack notification when an email campaign is successfully scheduled.
+ * Never throws: non-blocking.
+ */
+export async function sendSlackSchedulingNotification(
+  params: SchedulingNotificationParams
+): Promise<SlackNotificationResult> {
+  try {
+    const title = params.name ? `*${params.name}*` : `Campaign \`${params.campaignId.slice(0, 8)}\``;
+    const startTimeFormatted = params.startTime.toISOString();
+    const delaySeconds = Math.round(params.delayBetweenEmailsMs / 1000);
+
+    const fallbackText = `📅 *Email Campaign Scheduled*: ${title} (${params.totalRecipients} recipient${params.totalRecipients === 1 ? '' : 's'}) starting at ${startTimeFormatted}`;
+
+    const blocks = [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: '📅 Email Campaign Scheduled',
+          emoji: true,
+        },
+      },
+      {
+        type: 'section',
+        fields: [
+          {
+            type: 'mrkdwn',
+            text: `*Campaign:*\n${params.name || 'Untitled Campaign'}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Subject:*\n${params.subject}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Recipients:*\n${params.totalRecipients}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Scheduled Start:*\n${startTimeFormatted}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Delay Between Emails:*\n${delaySeconds}s (${params.delayBetweenEmailsMs}ms)`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Hourly Limit:*\n${params.hourlyLimit} emails/hr`,
+          },
+        ],
+      },
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `Campaign ID: \`${params.campaignId}\` • Status: *SCHEDULED*`,
+          },
+        ],
+      },
+    ];
+
+    return await postSlackNotification({
+      ownerId: params.ownerId,
+      channel: params.channel,
+      text: fallbackText,
+      blocks,
+    });
+  } catch (error: any) {
+    logger.error({ error, campaignId: params.campaignId }, 'Unhandled error in sendSlackSchedulingNotification (non-blocking)');
+    return { success: false, reason: error.message };
+  }
+}
+
+export interface CampaignCompletionNotificationParams {
+  campaignId: string;
+  ownerId?: string;
+  name?: string | null;
+  subject: string;
+  totalRecipients: number;
+  sentCount: number;
+  failedCount?: number;
+  completedAt?: Date;
+  channel?: string;
+}
+
+/**
+ * Dispatches a Slack notification when all emails in a campaign have finished delivery.
+ * Never throws: non-blocking.
+ */
+export async function sendSlackCampaignCompletionNotification(
+  params: CampaignCompletionNotificationParams
+): Promise<SlackNotificationResult> {
+  try {
+    const title = params.name ? `*${params.name}*` : `Campaign \`${params.campaignId.slice(0, 8)}\``;
+    const completedAt = params.completedAt || new Date();
+    const completedAtFormatted = completedAt.toISOString();
+    const failedCount = params.failedCount || 0;
+
+    const fallbackText = `🎉 *Email Campaign Completed*: ${title} sent ${params.sentCount}/${params.totalRecipients} emails at ${completedAtFormatted}`;
+
+    const blocks = [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: '🎉 Email Campaign Completed',
+          emoji: true,
+        },
+      },
+      {
+        type: 'section',
+        fields: [
+          {
+            type: 'mrkdwn',
+            text: `*Campaign:*\n${params.name || 'Untitled Campaign'}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Subject:*\n${params.subject}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Total Recipients:*\n${params.totalRecipients}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Successfully Sent:*\n${params.sentCount}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Failed / Cancelled:*\n${failedCount}`,
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Completed At:*\n${completedAtFormatted}`,
+          },
+        ],
+      },
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `Campaign ID: \`${params.campaignId}\` • Status: *COMPLETED*`,
+          },
+        ],
+      },
+    ];
+
+    return await postSlackNotification({
+      ownerId: params.ownerId,
+      channel: params.channel,
+      text: fallbackText,
+      blocks,
+    });
+  } catch (error: any) {
+    logger.error({ error, campaignId: params.campaignId }, 'Unhandled error in sendSlackCampaignCompletionNotification (non-blocking)');
+    return { success: false, reason: error.message };
+  }
+}
+

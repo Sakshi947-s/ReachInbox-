@@ -1,7 +1,28 @@
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { z } from 'zod';
 
-dotenv.config();
+// Ensure .env is located whether running from backend directory or workspace root
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const envCandidates = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), 'backend', '.env'),
+  path.resolve(currentDir, '../../.env'),
+];
+
+let loadedEnv = false;
+for (const envPath of envCandidates) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+    loadedEnv = true;
+    break;
+  }
+}
+if (!loadedEnv) {
+  dotenv.config();
+}
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -36,10 +57,12 @@ const envSchema = z.object({
   ELASTICSEARCH_USERNAME: z.string().optional().default(''),
   ELASTICSEARCH_PASSWORD: z.string().optional().default(''),
 
-  // Slack OAuth
+  // Slack OAuth & Bot Configuration
   SLACK_CLIENT_ID: z.string().optional().default(''),
   SLACK_CLIENT_SECRET: z.string().optional().default(''),
-  SLACK_CALLBACK_URL: z.string().default('http://localhost:5000/api/auth/slack/callback'),
+  SLACK_CALLBACK_URL: z.string().default('http://localhost:5000/api/slack/callback'),
+  SLACK_BOT_TOKEN: z.string().optional().default(''),
+  SLACK_CHANNEL_ID: z.string().optional().default(''),
 
   // Encryption key (hex 32 bytes = 64 characters)
   TOKEN_ENCRYPTION_KEY: z.string().length(64).default('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'),

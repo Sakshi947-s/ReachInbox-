@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../src/config/prisma.js';
 import { emailQueue, scheduleEmailJob } from '../src/queues/email.queue.js';
 import { createEmailWorker } from '../src/workers/email.worker.js';
 import { redisClient } from '../src/config/redis.js';
+import { _setTransporterForTesting } from '../src/integrations/email/smtp.js';
 
 describe('Restart Recovery & Idempotency Verification', () => {
   let testUserId: string;
@@ -31,9 +32,16 @@ describe('Restart Recovery & Idempotency Verification', () => {
     });
     testSenderId = sender.id;
     testSenderEmail = sender.email;
+
+    const mockTransporter: any = {
+      verify: vi.fn().mockResolvedValue(true),
+      sendMail: vi.fn().mockResolvedValue({ messageId: 'mock-recovery-msg-id' }),
+    };
+    _setTransporterForTesting(mockTransporter, 'ethereal', 'mock.user@ethereal.email');
   });
 
   afterAll(async () => {
+    _setTransporterForTesting(null, null, null);
     if (testUserId) {
       if (testEmailJobId) {
         await prisma.outboxEvent.deleteMany({ where: { aggregateId: testEmailJobId } });

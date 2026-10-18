@@ -1,10 +1,17 @@
 import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
 import { Toaster } from 'sonner';
 import './globals.css';
 
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  display: 'swap',
+});
+
 export const metadata: Metadata = {
-  title: 'ReachInbox | Email Job Scheduler',
-  description: 'Production-grade full-stack email campaign scheduler with BullMQ, Redis, PostgreSQL, and Ethereal SMTP.',
+  title: 'Outbox | Email Job Scheduler',
+  description: 'Clean, minimal email inbox and scheduling application with BullMQ, Redis, PostgreSQL, and SMTP.',
 };
 
 export default function RootLayout({
@@ -13,8 +20,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="bg-slate-50 text-slate-900 antialiased min-h-screen">
+    <html lang="en" className={inter.variable}>
+      <body className="bg-white text-gray-900 antialiased min-h-screen font-sans">
         {children}
         <Toaster position="top-right" richColors />
       </body>

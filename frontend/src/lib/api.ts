@@ -43,6 +43,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, name }),
     }),
+  /** Returns which integrations are configured without exposing secrets */
+  getAuthStatus: () =>
+    request<{
+      googleOAuthConfigured: boolean;
+      slackConfigured: boolean;
+      smtpProvider: 'real' | 'ethereal';
+      smtpFrom: string;
+      isProduction: boolean;
+    }>('/auth/status'),
 
   // Campaigns
   parseRecipients: (formData: FormData) =>
@@ -73,6 +82,20 @@ export const api = {
     request<{ emails: any[]; pagination: any; source: string }>(
       `/emails/search?q=${encodeURIComponent(query)}&page=${page}&limit=${limit}`
     ),
+  getEmailById: (id: string) =>
+    request<{ email: any }>(`/emails/${id}`),
+  /** Sends a test email to the authenticated user's own email address */
+  testSendEmail: () =>
+    request<{
+      success: boolean;
+      provider: 'real' | 'ethereal';
+      messageId?: string;
+      previewUrl?: string | null;
+      smtpVerified: boolean;
+      from: string;
+      to: string;
+      hint?: string | null;
+    }>('/emails/test-send', { method: 'POST' }),
 
   // Slack
   getSlackStatus: () => request<{ connected: boolean; connection?: any }>('/slack/status'),

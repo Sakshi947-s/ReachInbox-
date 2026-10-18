@@ -3,23 +3,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { User, Sender, SlackStatus, EmailJob, Campaign, Pagination } from '@/types';
-import { Navbar } from '@/components/layout/Navbar';
-import { ComposeModal } from '@/components/compose/ComposeModal';
-import { ScheduledTable } from '@/components/dashboard/ScheduledTable';
-import { SentTable } from '@/components/dashboard/SentTable';
-import { CampaignsTable } from '@/components/dashboard/CampaignsTable';
+import { User, Sender, SlackStatus, EmailJob, Pagination } from '@/types';
+import { Sidebar } from '@/components/layout/Sidebar';
+import { EmailTable } from '@/components/dashboard/EmailTable';
+import { EmailDetailView } from '@/components/dashboard/EmailDetailView';
+import { ComposeView } from '@/components/compose/ComposeView';
 import { SlackModal } from '@/components/dashboard/SlackModal';
 import { toast } from 'sonner';
-import {
-  Search,
-  RefreshCw,
-  Clock,
-  Send,
-  Layers,
-  ShieldCheck,
-  AlertCircle,
-} from 'lucide-react';
+import { Search, RefreshCw, Loader2 } from 'lucide-react';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -29,23 +20,27 @@ export default function DashboardPage() {
   const [senders, setSenders] = useState<Sender[]>([]);
   const [slackStatus, setSlackStatus] = useState<SlackStatus | undefined>();
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authStatus, setAuthStatus] = useState<{
+    googleOAuthConfigured: boolean;
+    slackConfigured: boolean;
+    smtpProvider: string;
+  } | null>(null);
 
-  // Active Tab
-  const [activeTab, setActiveTab] = useState<'scheduled' | 'sent' | 'campaigns'>('scheduled');
+  // Active Navigation & View
+  const [activeFolder, setActiveFolder] = useState<'scheduled' | 'sent'>('scheduled');
+  const [currentView, setCurrentView] = useState<'list' | 'compose' | 'detail'>('list');
+  const [selectedEmail, setSelectedEmail] = useState<EmailJob | null>(null);
 
   // Modals
-  const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [isSlackOpen, setIsSlackOpen] = useState(false);
 
-  // Search & Filter
+  // Search
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
 
   // Data states
   const [scheduledEmails, setScheduledEmails] = useState<EmailJob[]>([]);
   const [sentEmails, setSentEmails] = useState<EmailJob[]>([]);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-
   const [isLoadingData, setIsLoadingData] = useState(false);
 
   // Paginations
@@ -63,13 +58,6 @@ export default function DashboardPage() {
     totalPages: 1,
   });
 
-  const [campaignPagination, setCampaignPagination] = useState<Pagination>({
-    page: 1,
-    limit: 10,
-    total: 0,
-    totalPages: 1,
-  });
-
   // Load User profile & check authentication
   const loadUser = useCallback(async () => {
     try {
@@ -83,6 +71,11 @@ export default function DashboardPage() {
       setIsAuthLoading(false);
     }
   }, [router]);
+
+  // Fetch integration status
+  useEffect(() => {
+    api.getAuthStatus().then(setAuthStatus).catch(() => {});
+  }, []);
 
   // Fetch Scheduled Emails
   const fetchScheduled = useCallback(async (page = 1) => {
@@ -112,55 +105,32 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Fetch Campaigns
-  const fetchCampaigns = useCallback(async (page = 1) => {
-    setIsLoadingData(true);
-    try {
-      const res = await api.getCampaigns(page, 10);
-      setCampaigns(res.campaigns);
-      setCampaignPagination(res.pagination);
-    } catch (err: any) {
-      toast.error('Failed to load campaigns: ' + err.message);
-    } finally {
-      setIsLoadingData(false);
-    }
-  }, []);
-
   // Search handler (uses Elasticsearch backend)
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) {
-      refreshActiveTab();
+      if (activeFolder === 'scheduled') fetchScheduled(1);
+      else fetchSent(1);
       return;
     }
 
     setIsSearching(true);
     try {
       const res = await api.searchEmails(searchQuery);
-      if (activeTab === 'scheduled') {
+      if (activeFolder === 'scheduled') {
         setScheduledEmails(res.emails);
         setScheduledPagination(res.pagination);
       } else {
         setSentEmails(res.emails);
         setSentPagination(res.pagination);
       }
-      toast.info(`Search returned ${res.pagination.total} results (via ${res.source})`);
+      toast.info(`Found ${res.pagination.total} result(s)`);
     } catch (err: any) {
       toast.error('Search failed: ' + err.message);
     } finally {
       setIsSearching(false);
     }
   };
-
-  const refreshActiveTab = useCallback(() => {
-    if (activeTab === 'scheduled') {
-      fetchScheduled(scheduledPagination.page);
-    } else if (activeTab === 'sent') {
-      fetchSent(sentPagination.page);
-    } else {
-      fetchCampaigns(campaignPagination.page);
-    }
-  }, [activeTab, fetchScheduled, fetchSent, fetchCampaigns, scheduledPagination.page, sentPagination.page, campaignPagination.page]);
 
   const handleLogout = async () => {
     try {
@@ -172,16 +142,11 @@ export default function DashboardPage() {
     }
   };
 
-  const handleCancelCampaign = async (id: string) => {
-    if (!confirm('Are you sure you want to cancel this campaign? Pending scheduled emails will be stopped.')) {
-      return;
-    }
-
+  const handleCancelEmail = async (campaignId: string) => {
     try {
-      await api.cancelCampaign(id);
+      await api.cancelCampaign(campaignId);
       toast.success('Campaign cancelled');
-      fetchCampaigns(campaignPagination.page);
-      fetchScheduled(1);
+      fetchScheduled(scheduledPagination.page);
     } catch (err: any) {
       toast.error('Failed to cancel campaign: ' + err.message);
     }
@@ -196,184 +161,127 @@ export default function DashboardPage() {
   useEffect(() => {
     if (user) {
       setSearchQuery('');
-      if (activeTab === 'scheduled') fetchScheduled(1);
-      if (activeTab === 'sent') fetchSent(1);
-      if (activeTab === 'campaigns') fetchCampaigns(1);
+      if (activeFolder === 'scheduled') fetchScheduled(1);
+      if (activeFolder === 'sent') fetchSent(1);
     }
-  }, [activeTab, user, fetchScheduled, fetchSent, fetchCampaigns]);
+  }, [activeFolder, user, fetchScheduled, fetchSent]);
 
-  // Auto-refresh polling every 10 seconds to display real-time worker execution
+  // Real-time polling
   useEffect(() => {
     const interval = setInterval(() => {
-      if (user && !searchQuery) {
-        if (activeTab === 'scheduled') fetchScheduled(scheduledPagination.page);
-        if (activeTab === 'sent') fetchSent(sentPagination.page);
+      if (user && !searchQuery && currentView === 'list') {
+        if (activeFolder === 'scheduled') fetchScheduled(scheduledPagination.page);
+        if (activeFolder === 'sent') fetchSent(sentPagination.page);
       }
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [activeTab, user, searchQuery, fetchScheduled, fetchSent, scheduledPagination.page, sentPagination.page]);
+  }, [activeFolder, user, searchQuery, currentView, fetchScheduled, fetchSent, scheduledPagination.page, sentPagination.page]);
 
   if (isAuthLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="flex flex-col items-center space-y-3">
-          <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm font-medium text-slate-600">Loading ReachInbox Dashboard...</span>
+          <div className="w-8 h-8 border-3 border-green-600 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs text-gray-500 font-medium">Loading Outbox...</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Navbar */}
-      <Navbar
+    <div className="min-h-screen bg-white flex overflow-hidden">
+      {/* Left Sidebar matching Figma design */}
+      <Sidebar
         user={user}
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        onOpenCompose={() => setIsComposeOpen(true)}
+        activeFolder={activeFolder}
+        onSelectFolder={(folder) => {
+          setActiveFolder(folder);
+          setCurrentView('list');
+          setSelectedEmail(null);
+        }}
+        onOpenCompose={() => {
+          setCurrentView('compose');
+          setSelectedEmail(null);
+        }}
         onOpenSlack={() => setIsSlackOpen(true)}
         onLogout={handleLogout}
+        scheduledCount={scheduledPagination.total}
+        sentCount={sentPagination.total}
         slackStatus={slackStatus}
       />
 
-      {/* Main Content Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        {/* Metric Cards Banner */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Upcoming Queue
-              </span>
-              <div className="text-2xl font-bold text-slate-900 mt-1">
-                {scheduledPagination.total}
-              </div>
-              <span className="text-[11px] text-indigo-600 font-medium">Delayed BullMQ jobs</span>
-            </div>
-            <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-              <Clock className="w-6 h-6" />
-            </div>
-          </div>
-
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Delivered Emails
-              </span>
-              <div className="text-2xl font-bold text-slate-900 mt-1">
-                {sentPagination.total}
-              </div>
-              <span className="text-[11px] text-emerald-600 font-medium">Ethereal test deliveries</span>
-            </div>
-            <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-              <Send className="w-6 h-6" />
-            </div>
-          </div>
-
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Active Campaigns
-              </span>
-              <div className="text-2xl font-bold text-slate-900 mt-1">
-                {campaignPagination.total}
-              </div>
-              <span className="text-[11px] text-blue-600 font-medium">Batched schedules</span>
-            </div>
-            <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-              <Layers className="w-6 h-6" />
-            </div>
-          </div>
-
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Rate Limit Status
-              </span>
-              <div className="text-2xl font-bold text-slate-900 mt-1">
-                100/hr
-              </div>
-              <span className="text-[11px] text-purple-600 font-medium">Auto-reschedule enabled</span>
-            </div>
-            <div className="p-3 bg-purple-50 text-purple-600 rounded-xl">
-              <ShieldCheck className="w-6 h-6" />
-            </div>
-          </div>
-        </div>
-
-        {/* Action & Filter Bar */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          {/* Search bar */}
-          <form onSubmit={handleSearch} className="relative w-full sm:w-96">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search recipients, subjects, body..."
-              className="w-full pl-9 pr-4 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          </form>
-
-          {/* Refresh & Controls */}
-          <div className="flex items-center space-x-2 w-full sm:w-auto justify-end">
-            <button
-              onClick={refreshActiveTab}
-              disabled={isLoadingData}
-              className="flex items-center space-x-1 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50"
-              title="Refresh table"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
-              <span>Refresh</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Tab Content */}
-        {activeTab === 'scheduled' && (
-          <ScheduledTable
-            emails={scheduledEmails}
-            loading={isLoadingData}
-            pagination={scheduledPagination}
-            onPageChange={(page) => fetchScheduled(page)}
-            onRefresh={() => fetchScheduled(scheduledPagination.page)}
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col h-screen overflow-hidden bg-white">
+        {currentView === 'compose' ? (
+          <ComposeView
+            onBack={() => setCurrentView('list')}
+            onSuccess={() => {
+              fetchScheduled(1);
+              fetchSent(1);
+            }}
+            senders={senders}
           />
-        )}
-
-        {activeTab === 'sent' && (
-          <SentTable
-            emails={sentEmails}
-            loading={isLoadingData}
-            pagination={sentPagination}
-            onPageChange={(page) => fetchSent(page)}
-            onRefresh={() => fetchSent(sentPagination.page)}
+        ) : currentView === 'detail' && selectedEmail ? (
+          <EmailDetailView
+            email={selectedEmail}
+            onBack={() => {
+              setCurrentView('list');
+              setSelectedEmail(null);
+            }}
           />
-        )}
+        ) : (
+          <div className="flex-1 flex flex-col h-full overflow-hidden bg-white">
+            {/* Top Bar — Search + Refresh matching Figma */}
+            <div className="px-6 py-3 border-b border-gray-100 flex items-center gap-2 bg-white">
+              {/* Search bar — full-width, light gray background */}
+              <form onSubmit={handleSearch} className="relative flex-1">
+                <Search className="w-4 h-4 text-gray-350 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search"
+                  className="w-full pl-10 pr-4 py-2 text-sm bg-gray-50 border border-transparent rounded-xl text-gray-800 placeholder-gray-400 focus:outline-none focus:bg-white focus:border-gray-200 transition-all"
+                />
+              </form>
 
-        {activeTab === 'campaigns' && (
-          <CampaignsTable
-            campaigns={campaigns}
-            loading={isLoadingData}
-            pagination={campaignPagination}
-            onPageChange={(page) => fetchCampaigns(page)}
-            onCancelCampaign={handleCancelCampaign}
-            onRefresh={() => fetchCampaigns(campaignPagination.page)}
-          />
-        )}
-      </main>
+              {/* Refresh */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeFolder === 'scheduled') fetchScheduled(scheduledPagination.page);
+                  else fetchSent(sentPagination.page);
+                }}
+                disabled={isLoadingData}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors disabled:opacity-40 flex-shrink-0"
+                title="Refresh"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoadingData ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
 
-      {/* Compose Campaign Modal */}
-      <ComposeModal
-        isOpen={isComposeOpen}
-        onClose={() => setIsComposeOpen(false)}
-        onSuccess={() => {
-          fetchScheduled(1);
-          fetchCampaigns(1);
-        }}
-        senders={senders}
-      />
+            {/* Email Rows List Table */}
+            <div className="flex-1 overflow-y-auto">
+              <EmailTable
+                type={activeFolder}
+                emails={activeFolder === 'scheduled' ? scheduledEmails : sentEmails}
+                loading={isLoadingData}
+                pagination={activeFolder === 'scheduled' ? scheduledPagination : sentPagination}
+                onPageChange={(page) => {
+                  if (activeFolder === 'scheduled') fetchScheduled(page);
+                  else fetchSent(page);
+                }}
+                onSelectEmail={(email) => {
+                  setSelectedEmail(email);
+                  setCurrentView('detail');
+                }}
+                onCancelEmail={handleCancelEmail}
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Slack Integration Modal */}
       <SlackModal
@@ -381,6 +289,7 @@ export default function DashboardPage() {
         onClose={() => setIsSlackOpen(false)}
         slackStatus={slackStatus}
         onStatusUpdated={loadUser}
+        slackConfigured={authStatus?.slackConfigured ?? true}
       />
     </div>
   );

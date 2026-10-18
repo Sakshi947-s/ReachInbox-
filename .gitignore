@@ -37,3 +37,11 @@ yarn-error.log*
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Sensitive session data
+cookies.txt
+
+# Local TypeScript build cache
+frontend/tsconfig.tsbuildinfo
+
+# Environment example files are intentionally tracked

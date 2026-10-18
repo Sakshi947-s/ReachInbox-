@@ -3,6 +3,7 @@ import { prisma } from '../config/prisma.js';
 import { logger } from '../config/logger.js';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { searchEmailsInES, isElasticsearchAvailable } from '../integrations/elasticsearch/client.js';
+import { sendEmail, verifySmtpConfig, getSmtpProvider, getSmtpDiagnostics } from '../integrations/email/smtp.js';
 
 export async function getScheduledEmails(req: AuthenticatedRequest, res: Response): Promise<void> {
   const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
@@ -204,4 +205,100 @@ export async function searchEmails(req: AuthenticatedRequest, res: Response): Pr
     logger.error({ error }, 'Error searching emails');
     res.status(500).json({ error: 'Failed to search emails' });
   }
+}
+
+/**
+ * POST /api/emails/test-send
+ * Sends a test email to the authenticated user's own email address.
+ * Requires authentication. Never exposes credentials.
+ * Returns: { success, provider, messageId, previewUrl, smtpVerified, from, to }
+ */
+export async function testSendEmail(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    // 1. Verify SMTP connection first
+    const verification = await verifySmtpConfig();
+    if (!verification.ok) {
+      res.status(502).json({
+        success: false,
+        provider: verification.provider,
+        error: 'SMTP verification failed',
+        details: verification.message,
+        hint:
+          verification.provider === 'ethereal'
+            ? 'Ethereal requires internet access to generate a test account. Check your network.'
+            : `Check SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS in your .env file.`,
+      });
+      return;
+    }
+
+    const recipientEmail = req.user!.email;
+    const fromEmail = req.user!.email;
+    const provider = getSmtpProvider();
+
+    // 2. Send the test email
+    const result = await sendEmail({
+      from: fromEmail,
+      to: recipientEmail,
+      subject: `ReachInbox SMTP Test — ${new Date().toISOString()}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
+          <h2 style="color: #4f46e5;">ReachInbox SMTP Test</h2>
+          <p>This confirms your SMTP configuration is working correctly.</p>
+          <ul style="margin-top: 16px;">
+            <li><strong>Provider:</strong> ${provider === 'real' ? 'Real SMTP' : 'Ethereal (test)'}</li>
+            <li><strong>Sent to:</strong> ${recipientEmail}</li>
+            <li><strong>Sent at:</strong> ${new Date().toISOString()}</li>
+          </ul>
+          <p style="margin-top: 24px; color: #6b7280; font-size: 12px;">ReachInbox Email Job Scheduler</p>
+        </div>
+      `,
+    });
+
+    logger.info(
+      { to: recipientEmail, provider: result.provider, messageId: result.messageId },
+      'Test email sent successfully'
+    );
+
+    res.json({
+      success: true,
+      provider: result.provider,
+      messageId: result.messageId,
+      previewUrl: result.previewUrl || null,
+      smtpVerified: true,
+      from: fromEmail,
+      to: recipientEmail,
+      hint:
+        result.previewUrl
+          ? `Preview your test email at: ${result.previewUrl}`
+          : result.provider === 'real'
+          ? 'Email delivered. Check your inbox.'
+          : null,
+    });
+  } catch (error: any) {
+    logger.error({ error }, 'Test email send failed');
+    res.status(502).json({
+      success: false,
+      provider: getSmtpProvider(),
+      error: 'Failed to send test email',
+      details: error?.message || 'Unknown SMTP error',
+      hint:
+        getSmtpProvider() === 'real'
+          ? 'Verify SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASS. For Gmail, use an App Password with 2FA enabled.'
+          : 'Ethereal failed. Check internet connectivity.',
+    });
+  }
+}
+
+/**
+ * GET /api/emails/smtp-diagnostic
+ * Safe diagnostic that reports whether SMTP_PASS exists and its character count,
+ * but NEVER logs or returns the password, username, or credentials.
+ * Does not send any email.
+ */
+export async function getSmtpDiagnosticsHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const diagnostic = getSmtpDiagnostics();
+  res.json({
+    success: true,
+    diagnostic,
+  });
 }

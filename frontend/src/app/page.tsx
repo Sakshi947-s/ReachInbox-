@@ -19,10 +19,10 @@ export default function HomePage() {
   }, [router]);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+    <div className="min-h-screen bg-white flex items-center justify-center">
       <div className="flex flex-col items-center space-y-3">
-        <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-        <span className="text-xs text-slate-500">Checking authentication...</span>
+        <div className="w-8 h-8 border-3 border-green-600 border-t-transparent rounded-full animate-spin" />
+        <span className="text-xs text-gray-400">Loading Outbox...</span>
       </div>
     </div>
   );

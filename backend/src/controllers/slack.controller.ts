@@ -122,11 +122,30 @@ export async function getSlackStatus(req: AuthenticatedRequest, res: Response): 
 
 export async function disconnectSlack(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
+    // Best-effort: revoke token at Slack before removing it
+    const connection = await prisma.slackConnection.findUnique({
+      where: { ownerId: req.user!.id },
+    });
+
+    if (connection && connection.status === 'CONNECTED' && connection.accessTokenEncrypted) {
+      try {
+        const token = decrypt(connection.accessTokenEncrypted);
+        const client = new WebClient(token);
+        await client.auth.revoke();
+        logger.info({ userId: req.user!.id }, 'Slack token revoked at Slack API');
+      } catch (revokeErr) {
+        // Non-blocking: token may already be invalid
+        logger.warn({ revokeErr }, 'Could not revoke Slack token at API (continuing disconnect)');
+      }
+    }
+
+    // Wipe token and mark DISCONNECTED. Use a non-empty sentinel so decrypt is never
+    // accidentally called on an empty string (guarded anyway in testSlackMessage).
     await prisma.slackConnection.updateMany({
       where: { ownerId: req.user!.id },
       data: {
         status: 'DISCONNECTED',
-        accessTokenEncrypted: '',
+        accessTokenEncrypted: 'REVOKED',
       },
     });
 
@@ -138,6 +157,7 @@ export async function disconnectSlack(req: AuthenticatedRequest, res: Response):
   }
 }
 
+
 export async function testSlackMessage(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const connection = await prisma.slackConnection.findUnique({
@@ -146,6 +166,20 @@ export async function testSlackMessage(req: AuthenticatedRequest, res: Response)
 
     if (!connection || connection.status !== 'CONNECTED') {
       res.status(400).json({ error: 'No active Slack connection' });
+      return;
+    }
+
+    // Guard: an empty or blank token means the connection was revoked or incorrectly disconnected
+    if (!connection.accessTokenEncrypted || connection.accessTokenEncrypted.trim() === '') {
+      logger.warn({ userId: req.user!.id }, 'Slack token is empty; marking connection as ERROR');
+      await prisma.slackConnection.updateMany({
+        where: { ownerId: req.user!.id },
+        data: { status: 'ERROR' },
+      });
+      res.status(400).json({
+        error: 'Slack token is missing or revoked',
+        message: 'Please disconnect and reconnect your Slack workspace.',
+      });
       return;
     }
 
@@ -161,6 +195,24 @@ export async function testSlackMessage(req: AuthenticatedRequest, res: Response)
     res.json({ success: true, message: 'Test message sent to Slack successfully' });
   } catch (error: any) {
     logger.error({ error }, 'Error sending test message to Slack');
+
+    // Check for Slack token_revoked or invalid_auth errors
+    const slackErrorCode = error?.data?.error;
+    if (slackErrorCode === 'token_revoked' || slackErrorCode === 'invalid_auth') {
+      // Mark connection as ERROR so UI can prompt reconnect
+      await prisma.slackConnection.updateMany({
+        where: { ownerId: req.user!.id },
+        data: { status: 'ERROR' },
+      }).catch(() => {});
+      res.status(400).json({
+        error: 'Slack token is revoked or invalid',
+        message: 'Please disconnect and reconnect your Slack workspace.',
+        slackError: slackErrorCode,
+      });
+      return;
+    }
+
     res.status(500).json({ error: 'Failed to send test message to Slack', details: error.message });
   }
 }
+

@@ -4,9 +4,9 @@ import { logger } from '../config/logger.js';
 import { prisma } from '../config/prisma.js';
 import { createRedisConnection } from '../config/redis.js';
 import { EMAIL_QUEUE_NAME, EmailJobPayload, emailQueue } from '../queues/email.queue.js';
-import { sendEmail } from '../integrations/email/ethereal.js';
+import { sendEmail } from '../integrations/email/smtp.js';
 import { rateLimiterService } from '../services/rate-limiter.service.js';
-import { sendSlackRateLimitNotification } from '../integrations/slack/client.js';
+import { sendSlackRateLimitNotification, sendSlackCampaignCompletionNotification } from '../integrations/slack/client.js';
 import { indexEmailDocument, isElasticsearchAvailable } from '../integrations/elasticsearch/client.js';
 
 export function createEmailWorker(concurrency: number = env.WORKER_CONCURRENCY): Worker<EmailJobPayload> {
@@ -129,7 +129,11 @@ export function createEmailWorker(concurrency: number = env.WORKER_CONCURRENCY):
             data: {
               status: 'SENT',
               sentAt,
-              etherealPreviewUrl: sendResult.previewUrl || null,
+              // Only store a preview URL when the Ethereal transport is used
+              etherealPreviewUrl:
+                sendResult.provider === 'ethereal' && sendResult.previewUrl
+                  ? String(sendResult.previewUrl)
+                  : null,
               errorMessage: null,
             },
           }),
@@ -192,11 +196,24 @@ export function createEmailWorker(concurrency: number = env.WORKER_CONCURRENCY):
         });
 
         if (pendingCount === 0) {
-          await prisma.campaign.update({
+          const completedCampaign = await prisma.campaign.update({
             where: { id: campaignId },
             data: { status: 'COMPLETED' },
           });
           logger.info({ campaignId }, 'Campaign completed all recipient deliveries');
+
+          sendSlackCampaignCompletionNotification({
+            campaignId,
+            ownerId: completedCampaign.ownerId,
+            name: completedCampaign.name,
+            subject: completedCampaign.subject,
+            totalRecipients: completedCampaign.totalRecipients,
+            sentCount: completedCampaign.sentCount,
+            failedCount: completedCampaign.failedCount,
+            completedAt: new Date(),
+          }).catch((err) => {
+            logger.error({ err, campaignId }, 'Failed to dispatch Slack campaign completion notification (non-blocking)');
+          });
         }
 
         return { success: true, previewUrl: sendResult.previewUrl };
@@ -223,6 +240,33 @@ export function createEmailWorker(concurrency: number = env.WORKER_CONCURRENCY):
               ]
             : []),
         ]);
+
+        if (isFinalAttempt) {
+          const remainingPending = await prisma.emailJob.count({
+            where: {
+              campaignId,
+              status: { in: ['SCHEDULED', 'QUEUED', 'PROCESSING'] },
+            },
+          });
+          if (remainingPending === 0) {
+            const completedCampaign = await prisma.campaign.update({
+              where: { id: campaignId },
+              data: { status: 'COMPLETED' },
+            });
+            sendSlackCampaignCompletionNotification({
+              campaignId,
+              ownerId: completedCampaign.ownerId,
+              name: completedCampaign.name,
+              subject: completedCampaign.subject,
+              totalRecipients: completedCampaign.totalRecipients,
+              sentCount: completedCampaign.sentCount,
+              failedCount: completedCampaign.failedCount,
+              completedAt: new Date(),
+            }).catch((err) => {
+              logger.error({ err, campaignId }, 'Failed to dispatch Slack campaign completion notification (non-blocking)');
+            });
+          }
+        }
 
         throw sendError; // Re-throw so BullMQ triggers its exponential backoff
       }
