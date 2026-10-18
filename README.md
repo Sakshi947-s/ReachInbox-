@@ -813,7 +813,3 @@ Potential improvements include:
 - Deployment automation and production observability.
 
 ---
-
-## License
-
-Add the license applicable to this project if one has been selected. Otherwise, specify the repository's intended usage and distribution terms.
